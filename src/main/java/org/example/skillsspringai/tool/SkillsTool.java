@@ -73,9 +73,10 @@ public class SkillsTool implements ToolCallbackProvider {
                             if (skill != null) {
                                 ToolCallback callback = FunctionToolCallback.builder(
                                                 skill.getName(),
-                                                (java.util.function.Function<Object, String>) input -> skill.getInstructions()
+                                                (java.util.function.Function<SkillInput, String>) input -> skill.getInstructions()
                                         )
                                         .description(skill.getDescription())
+                                        .inputType(SkillInput.class)
                                         .build();
                                 callbacks.add(callback);
                                 log.info("加载技能: {}", skill.getName());

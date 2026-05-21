@@ -18,13 +18,13 @@ public class SkillLoaderService {
     @PostConstruct
     public void loadAllSkills() {
         // 1. 加载内置技能（只读）
-        int classpathCount = repository.loadFromPath("classpath:skills/**/SKILL.md");
+        int classpathCount = repository.loadFromPath("classpath:skills/**/*SKILL.md");
 
         // 2. 加载外部技能（可覆盖）
         File dynamicDir = new File("data/skills");
         int fileCount = 0;
         if (dynamicDir.exists()) {
-            fileCount = repository.loadFromPath("file:data/skills/**/SKILL.md");
+            fileCount = repository.loadFromPath("file:data/skills/**/*SKILL.md");
         }
 
         log.info("技能加载完成：内置{}个，外部{}个", classpathCount, fileCount);

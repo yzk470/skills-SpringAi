@@ -8,6 +8,7 @@ import org.example.skillsspringai.framework.SkillPackage;
 import org.example.skillsspringai.tool.SkillsTool;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.tool.ToolCallback;
 import reactor.core.publisher.Flux;
 
 import java.io.File;
@@ -27,6 +28,7 @@ public abstract class BaseAgent implements Agent {
     protected List<SkillPackage> skillPackages = new ArrayList<>();
     protected ChatClient chatClientWithSkills;
     protected File skillsDirectory;
+    protected SkillsTool skillsTool;
 
     public BaseAgent(String name, String desc, ChatClient chatClient, ChatClient.Builder builder) {
         this.id = UUID.randomUUID().toString();
@@ -42,19 +44,10 @@ public abstract class BaseAgent implements Agent {
 
     public void setSkillsDirectory(File skillsDirectory) {
         this.skillsDirectory = skillsDirectory;
-        try {
-            var skillsTool = SkillsTool.builder()
-                    .addSkillsDirectory(skillsDirectory.getAbsolutePath())
-                    .build();
-
-            this.chatClientWithSkills = chatClientWithSkills.mutate()
-                    .defaultSystem(description)
-                    .defaultTools(skillsTool)
-                    .build();
-
-        } catch (Exception e) {
-            log.error("初始化SkillsTool失败", e);
-        }
+        this.skillsTool = SkillsTool.builder()
+                .addSkillsDirectory(skillsDirectory.getAbsolutePath())
+                .build();
+        log.info("技能工具已初始化，共加载 {} 个技能", skillsTool.getToolCallbacks().length);
     }
 
     @Override
@@ -68,6 +61,9 @@ public abstract class BaseAgent implements Agent {
 
         var prompt = chatClientWithSkills.prompt().user(message);
 
+        if (skillsTool != null) {
+            prompt.toolCallbacks(skillsTool.getToolCallbacks());
+        }
         if (tools != null) {
             prompt.tools(tools);
         }
