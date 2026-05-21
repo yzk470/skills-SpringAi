@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./mvnw test *)",
+      "Bash(mysql --version)",
+      "Bash(mysql *)",
+      "Bash(./mvnw spring-boot:run -Dspring-boot.run.arguments=\"--spring.ai.openai.api-key=sk-a7f2834ea6914144918558b3ade1776b --spring.ai.openai.base-url=https://api.deepseek.com --spring.datasource.url=jdbc:mysql://localhost:3306/skills_agent?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai --spring.datasource.username=root --spring.datasource.password=yzk83567786\")",
+      "Bash(netstat -ano)",
+      "Bash(./mvnw spring-boot:run -Dspring-boot.run.arguments=\"--spring.ai.openai.api-key=sk-a7f2834ea6914144918558b3ade1776b --spring.ai.openai.base-url=https://api.deepseek.com --spring.datasource.url=jdbc:mysql://localhost:3306/skills_agent?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai --spring.datasource.username=root --spring.datasource.password=yzk83567786 --server.port=8088\")",
+      "Bash(curl *)"
+    ]
+  }
+}
