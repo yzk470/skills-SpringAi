@@ -1,25 +1,48 @@
+# ============================================
+# Spring AI Agent 应用配置文件
+# 注意：敏感信息请通过环境变量配置，不要硬编码
+# ============================================
+
 spring:
   application:
     name: skills-SpringAI-agent
   ai:
     openai:
+
       api-key: ${OPENAI_API_KEY}
-      base-url: ${OPENAI_BASE_URL:https://api.openai.com}
+      base-url: https://api.deepseek.com
       chat:
         options:
-          model: gpt-4
+          # 模型名称，根据实际使用的提供商调整
+          # OpenAI: gpt-4, gpt-3.5-turbo
+          # DeepSeek: deepseek-chat, deepseek-coder
+          model: deepseek-chat
           temperature: 0.7
+          # 添加超时配置，避免长时间等待
+          timeout: 30s
   datasource:
-    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:skills_agent}?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
-    username: ${DB_USERNAME:root}
-    password: ${DB_PASSWORD:root}
+    # 数据库连接 URL
+    # 生产环境请务必修改默认值为强密码
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:skills_agent}?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&connectTimeout=5000&socketTimeout=10000
+    # 【重要】生产环境禁止使用 root 账户和弱密码
+    username: root
+    password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
+    # 连接池配置（HikariCP）
+    hikari:
+      connection-timeout: 10000
+      maximum-pool-size: 10
+      minimum-idle: 5
+      idle-timeout: 300000
+      max-lifetime: 1800000
 
 server:
-  port: ${SERVER_PORT:8080}
+  port: ${SERVER_PORT:8081}
 
 mybatis-plus:
   configuration:
+    # 生产环境建议关闭 SQL 日志或使用 SLF4J
+    # log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
     map-underscore-to-camel-case: true
   global-config:
@@ -32,4 +55,9 @@ mybatis-plus:
 logging:
   level:
     root: INFO
+    # 开发环境可使用 DEBUG，生产环境建议改为 INFO
     org.example.skillsspringai: DEBUG
+    # 降低第三方库的日志级别，避免日志过多
+    com.zaxxer.hikari: WARN
+    org.springframework.ai: INFO
+

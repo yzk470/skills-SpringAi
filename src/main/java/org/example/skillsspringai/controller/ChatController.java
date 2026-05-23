@@ -12,7 +12,10 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import reactor.core.publisher.Mono;
+
 import java.io.IOException;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
@@ -75,6 +78,42 @@ public class ChatController {
         );
 
         return emitter;
+    }
+
+    @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
+    public Mono<Map<String, Object>> chat(
+            @RequestParam String agentName,
+            @RequestParam String message,
+            @RequestParam(defaultValue = "default-session") String sessionId) {
+
+        Agent agent = agentRegistry.getAgentByName(agentName).orElse(null);
+        if (agent == null) {
+            return Mono.just(Map.of("error", "Agent not found: " + agentName));
+        }
+
+        Map<String, Object> context = new HashMap<>();
+        context.put("sessionId", sessionId);
+        context.put("tools", financialTools);
+
+        long startTime = System.currentTimeMillis();
+
+        return agent.processStream(message, context)
+                .collectList()
+                .map(chunks -> {
+                    String fullResponse = String.join("", chunks);
+                    saveAuditLog(sessionId, agentName, message, fullResponse, startTime);
+                    return Map.of(
+                            "content", (Object) fullResponse,
+                            "agentName", agentName,
+                            "sessionId", sessionId,
+                            "durationMs", System.currentTimeMillis() - startTime
+                    );
+                })
+                .timeout(Duration.ofSeconds(60))
+                .onErrorResume(e -> {
+                    log.error("非流式输出异常", e);
+                    return Mono.just(Map.of("error", e.getMessage()));
+                });
     }
 
     private void saveAuditLog(String sessionId, String agentName,
