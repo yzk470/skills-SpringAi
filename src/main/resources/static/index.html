@@ -551,51 +551,19 @@ async function sendStreaming(agentName, msg) {
 
       let eventType = '';
       for (const line of lines) {
-        if (line.startsWith('event:')) {
-          eventType = line.slice(6).trim();
-        } else if (line.startsWith('data:')) {
-          const raw = line.slice(5).trim();
-          if (!raw) continue;
-
-          switch (eventType) {
-            case 'content': {
-              try {
-                const json = JSON.parse(raw);
-                if (json.chunk) { appendChunk(json.chunk); totalChunks++; }
-              } catch (e) { /* malformed JSON, skip */ }
-              break;
-            }
-            case 'error': {
-              try {
-                const json = JSON.parse(raw);
-                console.error('[SSE] Server error:', json.message);
-                // Keep partial content, append error note
-                if (currentChunks) {
-                  appendChunk('\n\n---\n⚠️ 服务器错误: ' + json.message);
-                } else {
-                  appendChunk('服务器错误: ' + json.message);
-                }
-              } catch (e) {}
-              break;
-            }
-            case 'partial': {
-              // Server sent partial content before error — replace with this full content
-              try {
-                const json = JSON.parse(raw);
-                if (json.content) {
-                  currentChunks = json.content;
-                  currentAssistantBubble.classList.add('typing-cursor');
-                  scheduleDomUpdate();
-                }
-              } catch (e) {}
-              break;
-            }
-            case 'done': {
-              try {
-                const json = JSON.parse(raw);
-                console.log('[SSE] Stream done:', json.totalChars, 'chars,', json.durationMs, 'ms');
-              } catch (e) {}
-              break;
+        if (line.startsWith('data:')) {
+          const text = line.slice(5);
+          if (text) {
+            // Check for error marker (sent as raw text from server)
+            if (text.startsWith('[ERROR]')) {
+              console.error('[SSE] Server error:', text.slice(8));
+              if (!currentChunks) {
+                currentChunks = '服务器错误: ' + text.slice(8);
+                scheduleDomUpdate();
+              }
+            } else {
+              appendChunk(text);
+              totalChunks++;
             }
           }
         }

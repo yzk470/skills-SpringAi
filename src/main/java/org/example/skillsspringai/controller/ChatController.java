@@ -10,11 +10,11 @@ import org.example.skillsspringai.tool.AuditLogService;
 import org.example.skillsspringai.tool.FinancialTools;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HashMap;
@@ -31,93 +31,35 @@ public class ChatController {
     private final AuditLogService auditLogService;
 
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream(
+    public Flux<String> stream(
             @RequestParam String agentName,
             @RequestParam String message,
             @RequestParam(defaultValue = "default-session") String sessionId) {
 
-        SseEmitter emitter = new SseEmitter(300000L);
         Agent agent = agentRegistry.getAgentByName(agentName).orElse(null);
 
         if (agent == null) {
-            return errorEmitter(emitter, "Agent not found: " + agentName);
+            return Flux.just("[ERROR] Agent not found: " + agentName);
         }
 
         Map<String, Object> context = new HashMap<>();
         context.put("sessionId", sessionId);
         context.put("tools", financialTools);
 
-        StringBuilder fullResponse = new StringBuilder();
+        StringBuffer fullResponse = new StringBuffer();
         long startTime = System.currentTimeMillis();
 
-        emitter.onCompletion(() -> {
-            log.info("SSE stream completed: session={}, size={} chars", sessionId, fullResponse.length());
-            saveAuditLog(sessionId, agentName, message, fullResponse.toString(), startTime);
-        });
-
-        emitter.onTimeout(() -> {
-            log.warn("SSE stream timeout: session={}, sent={} chars", sessionId, fullResponse.length());
-            saveAuditLog(sessionId, agentName, message, fullResponse.toString(), startTime);
-        });
-
-        emitter.onError(ex -> {
-            log.error("SSE stream transport error: session={}", sessionId, ex);
-        });
-
-        agent.processStream(message, context).subscribe(
-                chunk -> {
-                    fullResponse.append(chunk);
-                    sendSseEvent(emitter, "content", Map.of("chunk", chunk));
-                },
-                error -> {
-                    log.error("流式输出异常: session={}", sessionId, error);
-                    // 先发送已收集的部分内容，再发error事件
-                    if (fullResponse.length() > 0) {
-                        sendSseEvent(emitter, "partial", Map.of("content", fullResponse.toString()));
-                    }
-                    String rawMsg = error.getMessage();
-                    String userMsg = buildUserFriendlyError(rawMsg);
-                    log.error("流式输出异常: session={}, detail={}", sessionId, rawMsg);
-                    if (fullResponse.length() > 0) {
-                        sendSseEvent(emitter, "partial", Map.of("content", fullResponse.toString()));
-                    }
-                    sendSseEvent(emitter, "error", Map.of("message", userMsg));
+        return agent.processStream(message, context)
+                .doOnNext(fullResponse::append)
+                .doOnComplete(() -> {
+                    log.info("SSE stream completed: session={}, size={} chars", sessionId, fullResponse.length());
                     saveAuditLog(sessionId, agentName, message, fullResponse.toString(), startTime);
-                    emitter.complete();
-                },
-                () -> {
-                    sendSseEvent(emitter, "done", Map.of(
-                            "totalChars", fullResponse.length(),
-                            "durationMs", System.currentTimeMillis() - startTime
-                    ));
-                    emitter.complete();
-                }
-        );
-
-        return emitter;
-    }
-
-    private void sendSseEvent(SseEmitter emitter, String eventName, Object data) {
-        try {
-            synchronized (emitter) {
-                emitter.send(SseEmitter.event().name(eventName).data(data));
-            }
-        } catch (IOException e) {
-            log.error("SSE send failed: event={}", eventName, e);
-            try {
-                emitter.completeWithError(e);
-            } catch (Exception ignored) {
-            }
-        }
-    }
-
-    private SseEmitter errorEmitter(SseEmitter emitter, String errorMsg) {
-        try {
-            emitter.send(SseEmitter.event().name("error").data(Map.of("message", errorMsg)));
-            emitter.complete();
-        } catch (IOException ignored) {
-        }
-        return emitter;
+                })
+                .onErrorResume(error -> {
+                    log.error("流式输出异常: session={}", sessionId, error);
+                    saveAuditLog(sessionId, agentName, message, fullResponse.toString(), startTime);
+                    return Flux.just("[ERROR] " + buildUserFriendlyError(error.getMessage()));
+                });
     }
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
