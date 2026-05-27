@@ -12,17 +12,30 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import java.io.File;
+
 @Slf4j
 @Component
 public class PythonScriptExecutor {
 
     private final String pythonCommand;
 
+    private static final String[] KNOWN_PYTHON_PATHS = {
+        "D:\\python\\python3.10.8\\python.exe",
+        "D:\\python\\python3.14.2\\python.exe"
+    };
+
     public PythonScriptExecutor() {
         this.pythonCommand = detectPython();
     }
 
     private String detectPython() {
+        for (String path : KNOWN_PYTHON_PATHS) {
+            if (new File(path).exists()) {
+                log.info("检测到Python: {}", path);
+                return path;
+            }
+        }
         if (testCommand("python3")) return "python3";
         if (testCommand("python")) return "python";
         log.warn("未检测到Python环境");

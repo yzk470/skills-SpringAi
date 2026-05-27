@@ -40,7 +40,9 @@
       "Bash(findstr 8081)",
       "Bash(taskkill *)",
       "PowerShell(Stop-Process *)",
-      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('content','error'\\)[:800]\\)\")"
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('content','error'\\)[:800]\\)\")",
+      "Bash(Get-ChildItem -Path \"D:\\\\agents\\\\skills-SpringAi\" -Depth 1)",
+      "Bash(Select-Object Name, Mode)"
     ]
   }
 }

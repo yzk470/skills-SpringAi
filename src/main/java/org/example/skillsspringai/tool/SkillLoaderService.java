@@ -5,7 +5,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.example.skillsspringai.entity.Skill;
 import org.springframework.stereotype.Service;
+
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 @Service
@@ -13,24 +16,42 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class SkillLoaderService {
 
-    private final FileSystemSkillRepository repository;
+    private final SkillRegistry skillRegistry;
+
+    private final List<SkillSource> sources = new ArrayList<>();
 
     @PostConstruct
     public void loadAllSkills() {
-        // 1. 加载内置技能（只读）
-        int classpathCount = repository.loadFromPath("classpath:skills/**/*SKILL.md");
+        sources.add(new ClasspathMarkdownSkillSource("classpath:skills/**/*SKILL.md"));
+        sources.add(new ClasspathMarkdownSkillSource("classpath:skills.ppt/**/*SKILL.md"));
 
-        // 2. 加载外部技能（可覆盖）
         File dynamicDir = new File("data/skills");
-        int fileCount = 0;
         if (dynamicDir.exists()) {
-            fileCount = repository.loadFromPath("file:data/skills/**/*SKILL.md");
+            sources.add(new FileSystemMarkdownSkillSource("data/skills"));
         }
 
-        log.info("技能加载完成：内置{}个，外部{}个", classpathCount, fileCount);
+        int total = 0;
+        for (SkillSource source : sources) {
+            List<Skill> skills = source.load();
+            skillRegistry.registerAll(skills);
+            total += skills.size();
+        }
+
+        log.info("技能加载完成：共 {} 个技能 (内置{}个)", total, skillRegistry.count());
     }
 
     public Optional<Skill> findByName(String skillName) {
-        return Optional.ofNullable(repository.getSkill(skillName));
+        return skillRegistry.findByName(skillName);
+    }
+
+    public void addRemoteSource(String url, String cacheDir) {
+        UrlSkillSource source = new UrlSkillSource(url, cacheDir);
+        sources.add(source);
+        skillRegistry.registerAll(source.load());
+        log.info("远程技能已加载: {}", url);
+    }
+
+    public SkillRegistry getRegistry() {
+        return skillRegistry;
     }
 }

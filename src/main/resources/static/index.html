@@ -287,6 +287,30 @@
     transition: all .2s;
   }
   .quick-btn:hover { border-color: var(--accent); color: var(--text); }
+
+  .file-download-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 14px;
+    padding: 10px 14px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 13px;
+  }
+  .file-download-bar strong { color: var(--accent); }
+  .dl-btn {
+    background: var(--accent);
+    color: #fff;
+    text-decoration: none;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    transition: all .2s;
+  }
+  .dl-btn:hover { background: #3d7be6; box-shadow: 0 0 12px var(--accent-glow); }
 </style>
 </head>
 <body>
@@ -445,9 +469,33 @@ function appendChunk(chunk) {
 function finishAssistantMessage() {
   currentAssistantBubble.classList.remove('typing-cursor');
   currentAssistantBubble.innerHTML = renderMarkdown(currentChunks);
+  injectFileDownloads(currentAssistantBubble, currentChunks);
   currentAssistantBubble = null;
   currentChunks = '';
   scrollToBottom();
+}
+
+function injectFileDownloads(bubble, rawText) {
+  const filePattern = /\b([\w-]+\.(pptx|pdf|xlsx|docx|zip|png|jpg))\b/gi;
+  const seen = new Set();
+  let match;
+  while ((match = filePattern.exec(rawText)) !== null) {
+    const filename = match[1];
+    const lower = filename.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+
+    const ext = match[2].toLowerCase();
+    const icons = { pptx: '📊', pdf: '📄', xlsx: '📈', docx: '📝', zip: '📦', png: '🖼️', jpg: '🖼️' };
+    const icon = icons[ext] || '📎';
+    const url = '/ppt/' + filename;
+
+    const bar = document.createElement('div');
+    bar.className = 'file-download-bar';
+    bar.innerHTML = '<span>' + icon + ' <strong>' + filename + '</strong></span>'
+      + '<a href="' + url + '" download class="dl-btn">⬇ 下载</a>';
+    bubble.appendChild(bar);
+  }
 }
 
 async function sendMessage() {
@@ -479,40 +527,99 @@ async function sendMessage() {
 
 async function sendStreaming(agentName, msg) {
   const url = '/api/chat/stream?agentName=' + agentName + '&message=' + msg + '&sessionId=' + sessionId;
+  let totalChunks = 0;
   try {
     const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error('HTTP ' + response.status);
+    }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let streamClosedCleanly = false;
 
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) { streamClosedCleanly = true; break; }
       buffer += decoder.decode(value, { stream: true });
 
+      // SSE lines end with \n, but data JSON may contain \n inside strings.
+      // Split conservatively on known SSE boundaries.
       const lines = buffer.split('\n');
-      buffer = lines.pop();
+      // Last element might be incomplete; keep it in buffer
+      buffer = lines.pop() || '';
 
       let eventType = '';
       for (const line of lines) {
         if (line.startsWith('event:')) {
           eventType = line.slice(6).trim();
         } else if (line.startsWith('data:')) {
-          const data = line.slice(5).trim();
-          if (eventType === 'content') {
-            try {
-              const json = JSON.parse(data);
-              if (json.chunk) appendChunk(json.chunk);
-            } catch (e) {}
+          const raw = line.slice(5).trim();
+          if (!raw) continue;
+
+          switch (eventType) {
+            case 'content': {
+              try {
+                const json = JSON.parse(raw);
+                if (json.chunk) { appendChunk(json.chunk); totalChunks++; }
+              } catch (e) { /* malformed JSON, skip */ }
+              break;
+            }
+            case 'error': {
+              try {
+                const json = JSON.parse(raw);
+                console.error('[SSE] Server error:', json.message);
+                // Keep partial content, append error note
+                if (currentChunks) {
+                  appendChunk('\n\n---\n⚠️ 服务器错误: ' + json.message);
+                } else {
+                  appendChunk('服务器错误: ' + json.message);
+                }
+              } catch (e) {}
+              break;
+            }
+            case 'partial': {
+              // Server sent partial content before error — replace with this full content
+              try {
+                const json = JSON.parse(raw);
+                if (json.content) {
+                  currentChunks = json.content;
+                  currentAssistantBubble.classList.add('typing-cursor');
+                  scheduleDomUpdate();
+                }
+              } catch (e) {}
+              break;
+            }
+            case 'done': {
+              try {
+                const json = JSON.parse(raw);
+                console.log('[SSE] Stream done:', json.totalChars, 'chars,', json.durationMs, 'ms');
+              } catch (e) {}
+              break;
+            }
           }
         }
       }
     }
-    finishAssistantMessage();
+
+    // Stream ended naturally
+    if (currentAssistantBubble && currentChunks) {
+      finishAssistantMessage();
+    }
   } catch (err) {
-    currentAssistantBubble.textContent = '请求失败: ' + err.message;
-    currentAssistantBubble.classList.remove('typing-cursor');
-    currentAssistantBubble = null;
+    console.error('[SSE] Stream error:', err.message);
+    // Preserve partial content, show error
+    if (currentAssistantBubble) {
+      if (currentChunks) {
+        appendChunk('\n\n---\n⚠️ 连接中断: ' + err.message);
+        finishAssistantMessage();
+      } else {
+        currentAssistantBubble.textContent = '请求失败: ' + err.message;
+        currentAssistantBubble.classList.remove('typing-cursor');
+        currentAssistantBubble = null;
+        currentChunks = '';
+      }
+    }
   }
 }
 
@@ -524,7 +631,9 @@ async function sendNonStreaming(agentName, msg) {
     if (data.error) {
       currentAssistantBubble.textContent = data.error;
     } else {
-      currentAssistantBubble.innerHTML = renderMarkdown(data.content);
+      const rawText = data.content || '';
+      currentAssistantBubble.innerHTML = renderMarkdown(rawText);
+      injectFileDownloads(currentAssistantBubble, rawText);
     }
     currentAssistantBubble.classList.remove('typing-cursor');
     currentAssistantBubble = null;

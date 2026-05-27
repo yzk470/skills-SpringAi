@@ -36,15 +36,11 @@ public class ChatController {
             @RequestParam String message,
             @RequestParam(defaultValue = "default-session") String sessionId) {
 
-        SseEmitter emitter = new SseEmitter(180000L);
+        SseEmitter emitter = new SseEmitter(300000L);
         Agent agent = agentRegistry.getAgentByName(agentName).orElse(null);
 
         if (agent == null) {
-            try {
-                emitter.send("Agent not found");
-                emitter.complete();
-            } catch (IOException e) { }
-            return emitter;
+            return errorEmitter(emitter, "Agent not found: " + agentName);
         }
 
         Map<String, Object> context = new HashMap<>();
@@ -54,29 +50,73 @@ public class ChatController {
         StringBuilder fullResponse = new StringBuilder();
         long startTime = System.currentTimeMillis();
 
+        emitter.onCompletion(() -> {
+            log.info("SSE stream completed: session={}, size={} chars", sessionId, fullResponse.length());
+            saveAuditLog(sessionId, agentName, message, fullResponse.toString(), startTime);
+        });
+
+        emitter.onTimeout(() -> {
+            log.warn("SSE stream timeout: session={}, sent={} chars", sessionId, fullResponse.length());
+            saveAuditLog(sessionId, agentName, message, fullResponse.toString(), startTime);
+        });
+
+        emitter.onError(ex -> {
+            log.error("SSE stream transport error: session={}", sessionId, ex);
+        });
+
         agent.processStream(message, context).subscribe(
                 chunk -> {
                     fullResponse.append(chunk);
-                    try {
-                        emitter.send(SseEmitter.event().name("content").data(Map.of("chunk", chunk)));
-                    } catch (IOException e) {
-                        log.error("发送消息失败", e);
-                    }
+                    sendSseEvent(emitter, "content", Map.of("chunk", chunk));
                 },
                 error -> {
-                    log.error("流式输出异常", error);
+                    log.error("流式输出异常: session={}", sessionId, error);
+                    // 先发送已收集的部分内容，再发error事件
+                    if (fullResponse.length() > 0) {
+                        sendSseEvent(emitter, "partial", Map.of("content", fullResponse.toString()));
+                    }
+                    String rawMsg = error.getMessage();
+                    String userMsg = buildUserFriendlyError(rawMsg);
+                    log.error("流式输出异常: session={}, detail={}", sessionId, rawMsg);
+                    if (fullResponse.length() > 0) {
+                        sendSseEvent(emitter, "partial", Map.of("content", fullResponse.toString()));
+                    }
+                    sendSseEvent(emitter, "error", Map.of("message", userMsg));
                     saveAuditLog(sessionId, agentName, message, fullResponse.toString(), startTime);
-                    emitter.completeWithError(error);
+                    emitter.complete();
                 },
                 () -> {
-                    try {
-                        emitter.send(SseEmitter.event().name("done"));
-                    } catch (IOException e) { }
+                    sendSseEvent(emitter, "done", Map.of(
+                            "totalChars", fullResponse.length(),
+                            "durationMs", System.currentTimeMillis() - startTime
+                    ));
                     emitter.complete();
-                    saveAuditLog(sessionId, agentName, message, fullResponse.toString(), startTime);
                 }
         );
 
+        return emitter;
+    }
+
+    private void sendSseEvent(SseEmitter emitter, String eventName, Object data) {
+        try {
+            synchronized (emitter) {
+                emitter.send(SseEmitter.event().name(eventName).data(data));
+            }
+        } catch (IOException e) {
+            log.error("SSE send failed: event={}", eventName, e);
+            try {
+                emitter.completeWithError(e);
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private SseEmitter errorEmitter(SseEmitter emitter, String errorMsg) {
+        try {
+            emitter.send(SseEmitter.event().name("error").data(Map.of("message", errorMsg)));
+            emitter.complete();
+        } catch (IOException ignored) {
+        }
         return emitter;
     }
 
@@ -109,11 +149,26 @@ public class ChatController {
                             "durationMs", System.currentTimeMillis() - startTime
                     );
                 })
-                .timeout(Duration.ofSeconds(60))
+                .timeout(Duration.ofSeconds(180))
                 .onErrorResume(e -> {
                     log.error("非流式输出异常", e);
-                    return Mono.just(Map.of("error", e.getMessage()));
+                    String userMsg = buildUserFriendlyError(e.getMessage());
+                    return Mono.just(Map.of("error", userMsg));
                 });
+    }
+
+    private String buildUserFriendlyError(String rawMsg) {
+        if (rawMsg == null) return "未知错误，请重试";
+        if (rawMsg.contains("Connection reset") || rawMsg.contains("SocketException")) {
+            return "DeepSeek API 连接被重置，网络波动或服务端限流导致，请稍后重试。";
+        }
+        if (rawMsg.contains("timeout") || rawMsg.contains("Timeout")) {
+            return "请求超时，请简化问题后重试。";
+        }
+        if (rawMsg.contains("Conversion from JSON")) {
+            return "AI模型生成的工具调用参数格式异常（通常是因为脚本内容太长导致JSON截断），请尝试简化请求或分步执行。";
+        }
+        return "服务异常: " + (rawMsg.length() > 100 ? rawMsg.substring(0, 100) + "..." : rawMsg);
     }
 
     private void saveAuditLog(String sessionId, String agentName,
